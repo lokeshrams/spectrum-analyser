@@ -14,8 +14,12 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.media.audiofx.Visualizer;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.TypedValue;
+import android.view.GestureDetector;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -25,8 +29,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.Arrays;
+import java.util.Random;
 
 public class MainActivity extends Activity {
 
@@ -55,11 +61,30 @@ public class MainActivity extends Activity {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE};
     static final String[] ORIENT_NAMES = {"Auto-rotate", "Portrait", "Landscape"};
 
+    static final String[] STYLE_NAMES = {"Bars", "Line", "Waterfall"};
+    static final int[] AUTO_VALUES = {0, 10, 20, 30, 60};
+    static final String[] AUTO_NAMES = {"Off", "Every 10 s", "Every 20 s", "Every 30 s", "Every 60 s"};
+    static final String[] ON_OFF = {"On", "Off"};
+
     private interface ColorCallback { void onColor(int color); }
 
     private SpectrumView spectrum;
     private TextView status;
-    private final Button[] modeButtons = new Button[3];
+    private Button styleLabel;
+    private LinearLayout bar;
+    private boolean controlsVisible = true;
+    private boolean hideHintShown = false;
+    private int autoIdx;
+    private boolean keepOn;
+    private boolean autoGain;
+    private int gainDb;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Random rng = new Random();
+    private final Runnable autoCycle = new Runnable() {
+        @Override public void run() {
+            randomStyle();   // randomStyle() reschedules the timer
+        }
+    };
     private SharedPreferences prefs;
     private int mode;
     private int[] palette;
@@ -78,9 +103,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         prefs = getSharedPreferences("spectrum", MODE_PRIVATE);
-        mode = prefs.getInt("mode", SpectrumView.MODE_BARS);
+        mode = clampIdx(prefs.getInt("mode", SpectrumView.MODE_BARS), STYLE_NAMES.length);
+        autoIdx = clampIdx(prefs.getInt("autoIdx", 0), AUTO_VALUES.length);
+        keepOn = prefs.getBoolean("keepOn", true);
+        autoGain = prefs.getBoolean("autoGain", true);
+        gainDb = Math.max(-12, Math.min(24, prefs.getInt("gainDb", 0)));
+        applyKeepOn();
         palette = loadPalette();
         fallIdx = clampIdx(prefs.getInt("fallIdx", 3), FALL_VALUES.length);
         widthIdx = clampIdx(prefs.getInt("widthIdx", 1), WIDTH_VALUES.length);
@@ -97,6 +126,8 @@ public class MainActivity extends Activity {
         spectrum.setFallSeconds(FALL_VALUES[fallIdx]);
         spectrum.setLineWidthDp(WIDTH_VALUES[widthIdx]);
         spectrum.setBandCount(BAND_VALUES[widthIdx]);
+        spectrum.setAutoGain(autoGain);
+        spectrum.setGainDb(gainDb);
         root.addView(spectrum, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -107,21 +138,27 @@ public class MainActivity extends Activity {
         root.addView(status, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START));
 
-        LinearLayout bar = new LinearLayout(this);
+        bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setBackgroundColor(0xE0111111);
-        String[] labels = {"Bars", "Line", "Waterfall"};
-        for (int i = 0; i < 3; i++) {
-            final int m = i;
-            Button b = makeBarButton(labels[i]);
-            b.setOnClickListener(v -> setMode(m));
-            modeButtons[i] = b;
-            bar.addView(b, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
-        }
-        Button colours = makeBarButton("Colours");
-        colours.setTextColor(Color.WHITE);
+        Button prev = makeBarButton("◀");
+        prev.setOnClickListener(v -> stepStyle(-1));
+        bar.addView(prev, new LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.MATCH_PARENT));
+        styleLabel = makeBarButton("");
+        styleLabel.setTypeface(null, Typeface.BOLD);
+        styleLabel.setOnClickListener(v -> pickOne("Style", STYLE_NAMES, mode, this::setMode));
+        bar.addView(styleLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        Button next = makeBarButton("▶");
+        next.setOnClickListener(v -> stepStyle(1));
+        bar.addView(next, new LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.MATCH_PARENT));
+        Button random = makeBarButton("🎲");
+        random.setTextSize(20);
+        random.setOnClickListener(v -> randomStyle());
+        bar.addView(random, new LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT));
+        Button colours = makeBarButton("🎨");
+        colours.setTextSize(20);
         colours.setOnClickListener(v -> showPaletteDialog());
-        bar.addView(colours, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        bar.addView(colours, new LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT));
         Button settings = makeBarButton("⚙");
         settings.setTextColor(Color.WHITE);
         settings.setTextSize(20);
@@ -130,6 +167,22 @@ public class MainActivity extends Activity {
         root.addView(bar, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(56), Gravity.BOTTOM));
 
+        final GestureDetector gestures = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDown(MotionEvent e) { return true; }
+            @Override public boolean onSingleTapConfirmed(MotionEvent e) {
+                toggleControls();
+                return true;
+            }
+            @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
+                if (Math.abs(vx) > Math.abs(vy) && Math.abs(vx) > dp(400)) {
+                    stepStyle(vx < 0 ? 1 : -1);
+                    return true;
+                }
+                return false;
+            }
+        });
+        spectrum.setOnTouchListener((v, ev) -> gestures.onTouchEvent(ev));
+
         setContentView(root);
         refreshButtons();
     }
@@ -137,6 +190,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        scheduleAutoCycle();
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startAudio();
         } else if (!askedPermission) {
@@ -149,6 +203,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        handler.removeCallbacks(autoCycle);
         stopAudio();
         super.onPause();
     }
@@ -311,19 +366,56 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- mode & palette
 
     private void setMode(int m) {
-        mode = m;
-        spectrum.setMode(m);
-        prefs.edit().putInt("mode", m).apply();
+        mode = clampIdx(m, STYLE_NAMES.length);
+        spectrum.setMode(mode);
+        prefs.edit().putInt("mode", mode).apply();
         refreshButtons();
+        scheduleAutoCycle();   // a manual change restarts the auto-cycle timer
+    }
+
+    private void stepStyle(int dir) {
+        int n = STYLE_NAMES.length;
+        setMode(((mode + dir) % n + n) % n);
+        if (!controlsVisible) flashStyleName();
+    }
+
+    private void randomStyle() {
+        int n = STYLE_NAMES.length;
+        int m = mode;
+        if (n > 1) while (m == mode) m = rng.nextInt(n);
+        setMode(m);
+        if (!controlsVisible) flashStyleName();
+    }
+
+    private void flashStyleName() {
+        Toast.makeText(this, STYLE_NAMES[mode], Toast.LENGTH_SHORT).show();
+    }
+
+    private void scheduleAutoCycle() {
+        handler.removeCallbacks(autoCycle);
+        if (AUTO_VALUES[autoIdx] > 0) handler.postDelayed(autoCycle, AUTO_VALUES[autoIdx] * 1000L);
+    }
+
+    private void toggleControls() {
+        controlsVisible = !controlsVisible;
+        int vis = controlsVisible ? View.VISIBLE : View.GONE;
+        bar.setVisibility(vis);
+        status.setVisibility(vis);
+        spectrum.setPadding(0, controlsVisible ? dp(32) : dp(8), 0, controlsVisible ? dp(60) : dp(4));
+        if (!controlsVisible && !hideHintShown) {
+            hideHintShown = true;
+            Toast.makeText(this, "Tap to show controls · swipe to change style", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void applyKeepOn() {
+        if (keepOn) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 
     private void refreshButtons() {
-        int accent = palette[palette.length - 1];
-        for (int i = 0; i < modeButtons.length; i++) {
-            boolean sel = i == mode;
-            modeButtons[i].setTextColor(sel ? accent : 0xFF8A8A8A);
-            modeButtons[i].setTypeface(null, sel ? Typeface.BOLD : Typeface.NORMAL);
-        }
+        styleLabel.setText(STYLE_NAMES[mode]);
+        styleLabel.setTextColor(palette[palette.length - 1]);
     }
 
     private void applyPalette(int[] p) {
@@ -534,8 +626,77 @@ public class MainActivity extends Activity {
             });
         }));
 
-        dialog.setView(list);
+        list.addView(settingRow("Auto-cycle styles (random)", AUTO_NAMES[autoIdx], v -> {
+            dialog.dismiss();
+            pickOne("Auto-cycle styles", AUTO_NAMES, autoIdx, i -> {
+                autoIdx = i;
+                prefs.edit().putInt("autoIdx", i).apply();
+                scheduleAutoCycle();
+            });
+        }));
+        list.addView(settingRow("Auto-gain", autoGain ? "On" : "Off", v -> {
+            dialog.dismiss();
+            pickOne("Auto-gain", ON_OFF, autoGain ? 0 : 1, i -> {
+                autoGain = i == 0;
+                spectrum.setAutoGain(autoGain);
+                prefs.edit().putBoolean("autoGain", autoGain).apply();
+            });
+        }));
+        list.addView(settingRow("Sensitivity", formatDb(gainDb), v -> {
+            dialog.dismiss();
+            showSensitivityDialog();
+        }));
+        list.addView(settingRow("Keep screen on", keepOn ? "On" : "Off", v -> {
+            dialog.dismiss();
+            pickOne("Keep screen on", ON_OFF, keepOn ? 0 : 1, i -> {
+                keepOn = i == 0;
+                applyKeepOn();
+                prefs.edit().putBoolean("keepOn", keepOn).apply();
+            });
+        }));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        dialog.setView(scroll);
         dialog.show();
+    }
+
+    private static String formatDb(int db) {
+        return (db > 0 ? "+" : "") + db + " dB";
+    }
+
+    private void showSensitivityDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(12), dp(20), dp(4));
+        final TextView value = new TextView(this);
+        value.setTextColor(Color.WHITE);
+        value.setTextSize(18);
+        value.setText(formatDb(gainDb));
+        box.addView(value);
+        TextView hint = new TextView(this);
+        hint.setTextColor(0xFF9E9E9E);
+        hint.setText(autoGain ? "Auto-gain is on: this fine-tunes on top of it." : "Raise it if the bars look low.");
+        box.addView(hint);
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(36);                 // -12 .. +24 dB
+        sb.setProgress(gainDb + 12);
+        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                gainDb = p - 12;
+                value.setText(formatDb(gainDb));
+                spectrum.setGainDb(gainDb);       // live preview
+                prefs.edit().putInt("gainDb", gainDb).apply();
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) { }
+            @Override public void onStopTrackingTouch(SeekBar s) { }
+        });
+        box.addView(sb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Sensitivity")
+                .setView(box)
+                .setPositiveButton("Done", null)
+                .show();
     }
 
     private interface IndexCallback { void onPick(int index); }

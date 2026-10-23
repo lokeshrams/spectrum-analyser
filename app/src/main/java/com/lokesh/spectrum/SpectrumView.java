@@ -106,8 +106,18 @@ public class SpectrumView extends View {
             float m = 0f;
             for (int k = k0; k < k1; k++) if (mags[k] > m) m = mags[k];
             // dB with a gentle high-frequency tilt (music energy falls with frequency)
-            float db = (float) (20.0 * Math.log10(m + 1e-6)) + 6f * b / bands;
-            float lv = clamp(db / DB_RANGE);
+            rawDb[b] = (float) (20.0 * Math.log10(m + 1e-6)) + 6f * b / bands;
+        }
+        float frameMax = 0f;
+        for (int b = 0; b < bands; b++) if (rawDb[b] > frameMax) frameMax = rawDb[b];
+        float offset = 0f;
+        if (autoGain) {
+            if (frameMax > autoRef) autoRef += (frameMax - autoRef) * 0.5f;   // fast attack
+            else if (frameMax > 8f) autoRef -= 0.15f;                          // slow release, not during silence
+            offset = Math.max(-18f, Math.min(24f, AUTO_TARGET - autoRef));
+        }
+        for (int b = 0; b < bands; b++) {
+            float lv = clamp((rawDb[b] + offset + gainDb) / DB_RANGE);
             target[b] = lv;
             wfLevels[rowOff + b] = lv;
         }
@@ -173,6 +183,23 @@ public class SpectrumView extends View {
         invalidate();
     }
 
+    private float gainDb = 0f;
+    private boolean autoGain = true;
+    private static final float AUTO_TARGET = DB_RANGE * 0.92f;
+    private float autoRef = AUTO_TARGET;
+    private final float[] rawDb = new float[MAX_BANDS];
+
+    /** Manual sensitivity in dB (added on top of auto-gain when that is on). */
+    public void setGainDb(float g) {
+        gainDb = g;
+    }
+
+    /** Auto-gain keeps loud parts near the top whatever the phone volume or song loudness. */
+    public void setAutoGain(boolean on) {
+        autoGain = on;
+        autoRef = AUTO_TARGET;
+    }
+
     /** Stroke width of the line view, in dp. */
     public void setLineWidthDp(float w) {
         linePaint.setStrokeWidth(dp(w));
@@ -187,10 +214,13 @@ public class SpectrumView extends View {
         float barDrop = instant ? 1f : dt / fallSeconds;
         // peak caps drift down at half the bar speed; with the fall off they still use a 2 s drift
         float peakDrop = dt / (instant ? 2f : fallSeconds * 2f);
+        // time-based smoothing: audio frames arrive only ~20x per second, so glide between them
+        float kUp = (float) (1.0 - Math.exp(-dt / 0.04));
+        float kFollow = (float) (1.0 - Math.exp(-dt / 0.045));
         for (int b = 0; b < bands; b++) {
             float t = target[b];
-            if (instant) disp[b] = t;
-            else if (t > disp[b]) disp[b] += (t - disp[b]) * 0.55f;
+            if (instant) disp[b] += (t - disp[b]) * kFollow;          // fall off: glide both ways
+            else if (t > disp[b]) disp[b] += (t - disp[b]) * kUp;
             else disp[b] = Math.max(t, disp[b] - barDrop);
             if (disp[b] >= peak[b]) {
                 peak[b] = disp[b];
