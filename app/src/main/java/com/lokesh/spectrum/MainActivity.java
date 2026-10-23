@@ -47,7 +47,8 @@ public class MainActivity extends Activity {
     static final float[] FALL_VALUES = {0f, 0.5f, 1f, 2f, 3f, 5f};
     static final String[] FALL_NAMES = {"Off (no fall)", "0.5 s", "1 s", "2 s", "3 s", "5 s"};
     static final float[] WIDTH_VALUES = {2f, 4f, 7f, 10f};
-    static final String[] WIDTH_NAMES = {"Thin", "Medium", "Thick", "Extra thick"};
+    static final int[] BAND_VALUES = {96, 64, 40, 24};     // fewer bars = wider bars
+    static final String[] WIDTH_NAMES = {"Thin (96 bars)", "Medium (64 bars)", "Thick (40 bars)", "Extra thick (24 bars)"};
     static final int[] ORIENT_VALUES = {
             ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR,
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT,
@@ -95,6 +96,7 @@ public class MainActivity extends Activity {
         spectrum.setPalette(palette);
         spectrum.setFallSeconds(FALL_VALUES[fallIdx]);
         spectrum.setLineWidthDp(WIDTH_VALUES[widthIdx]);
+        spectrum.setBandCount(BAND_VALUES[widthIdx]);
         root.addView(spectrum, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -514,11 +516,12 @@ public class MainActivity extends Activity {
                 prefs.edit().putInt("fallIdx", i).apply();
             });
         }));
-        list.addView(settingRow("Line width", WIDTH_NAMES[widthIdx], v -> {
+        list.addView(settingRow("Bar / line width", WIDTH_NAMES[widthIdx], v -> {
             dialog.dismiss();
-            pickOne("Line width", WIDTH_NAMES, widthIdx, i -> {
+            pickOne("Bar / line width", WIDTH_NAMES, widthIdx, i -> {
                 widthIdx = i;
                 spectrum.setLineWidthDp(WIDTH_VALUES[i]);
+                spectrum.setBandCount(BAND_VALUES[i]);
                 prefs.edit().putInt("widthIdx", i).apply();
             });
         }));

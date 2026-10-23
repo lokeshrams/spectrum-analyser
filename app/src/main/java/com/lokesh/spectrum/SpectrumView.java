@@ -20,20 +20,21 @@ public class SpectrumView extends View {
     public static final int MODE_LINE = 1;
     public static final int MODE_WATERFALL = 2;
 
-    private static final int BANDS = 72;
+    private static final int MAX_BANDS = 128;
+    private int bands = 64;   // number of bars; fewer bars = wider bars
     private static final float MIN_HZ = 40f;
     private static final float MAX_HZ = 16000f;
     private static final float DB_RANGE = 42f;   // magnitude 1..128 -> 0..42 dB
     private static final int WF_ROWS = 240;
 
-    private final float[] target = new float[BANDS];
-    private final float[] disp = new float[BANDS];
-    private final float[] peak = new float[BANDS];
-    private final long[] peakTime = new long[BANDS];
+    private final float[] target = new float[MAX_BANDS];
+    private final float[] disp = new float[MAX_BANDS];
+    private final float[] peak = new float[MAX_BANDS];
+    private final long[] peakTime = new long[MAX_BANDS];
 
-    private final float[] wfLevels = new float[BANDS * WF_ROWS];
-    private final int[] wfPixels = new int[BANDS * WF_ROWS];
-    private final Bitmap wfBitmap = Bitmap.createBitmap(BANDS, WF_ROWS, Bitmap.Config.ARGB_8888);
+    private final float[] wfLevels = new float[MAX_BANDS * WF_ROWS];
+    private final int[] wfPixels = new int[MAX_BANDS * WF_ROWS];
+    private Bitmap wfBitmap = Bitmap.createBitmap(64, WF_ROWS, Bitmap.Config.ARGB_8888);
     private int wfHead = 0;
     private boolean wfDirty = true;
 
@@ -51,7 +52,7 @@ public class SpectrumView extends View {
     private final Paint bmpPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Path linePath = new Path();
     private final Path fillPath = new Path();
-    private final Rect wfSrc = new Rect(0, 0, BANDS, WF_ROWS);
+    private final Rect wfSrc = new Rect(0, 0, 64, WF_ROWS);
     private final Rect wfDst = new Rect();
 
     private float plotTop, plotBottom, labelH;
@@ -94,10 +95,10 @@ public class SpectrumView extends View {
         if (n < 4 || binHz <= 0) return;
         double ratio = MAX_HZ / MIN_HZ;
         wfHead = (wfHead - 1 + WF_ROWS) % WF_ROWS;
-        int rowOff = wfHead * BANDS;
-        for (int b = 0; b < BANDS; b++) {
-            double f0 = MIN_HZ * Math.pow(ratio, (double) b / BANDS);
-            double f1 = MIN_HZ * Math.pow(ratio, (double) (b + 1) / BANDS);
+        int rowOff = wfHead * bands;
+        for (int b = 0; b < bands; b++) {
+            double f0 = MIN_HZ * Math.pow(ratio, (double) b / bands);
+            double f1 = MIN_HZ * Math.pow(ratio, (double) (b + 1) / bands);
             int k0 = Math.max(1, (int) Math.floor(f0 / binHz));
             int k1 = Math.min(n - 1, (int) Math.ceil(f1 / binHz));
             if (k0 > n - 2) k0 = n - 2;
@@ -105,7 +106,7 @@ public class SpectrumView extends View {
             float m = 0f;
             for (int k = k0; k < k1; k++) if (mags[k] > m) m = mags[k];
             // dB with a gentle high-frequency tilt (music energy falls with frequency)
-            float db = (float) (20.0 * Math.log10(m + 1e-6)) + 6f * b / BANDS;
+            float db = (float) (20.0 * Math.log10(m + 1e-6)) + 6f * b / bands;
             float lv = clamp(db / DB_RANGE);
             target[b] = lv;
             wfLevels[rowOff + b] = lv;
@@ -156,6 +157,22 @@ public class SpectrumView extends View {
         fallSeconds = Math.max(0f, s);
     }
 
+    /** Number of frequency bars (also the line's points and the waterfall's columns). Resets the history. */
+    public void setBandCount(int n) {
+        n = Math.max(8, Math.min(MAX_BANDS, n));
+        if (n == bands) return;
+        bands = n;
+        java.util.Arrays.fill(target, 0f);
+        java.util.Arrays.fill(disp, 0f);
+        java.util.Arrays.fill(peak, 0f);
+        java.util.Arrays.fill(wfLevels, 0f);
+        wfHead = 0;
+        wfBitmap = Bitmap.createBitmap(bands, WF_ROWS, Bitmap.Config.ARGB_8888);
+        wfSrc.set(0, 0, bands, WF_ROWS);
+        wfDirty = true;
+        invalidate();
+    }
+
     /** Stroke width of the line view, in dp. */
     public void setLineWidthDp(float w) {
         linePaint.setStrokeWidth(dp(w));
@@ -170,7 +187,7 @@ public class SpectrumView extends View {
         float barDrop = instant ? 1f : dt / fallSeconds;
         // peak caps drift down at half the bar speed; with the fall off they still use a 2 s drift
         float peakDrop = dt / (instant ? 2f : fallSeconds * 2f);
-        for (int b = 0; b < BANDS; b++) {
+        for (int b = 0; b < bands; b++) {
             float t = target[b];
             if (instant) disp[b] = t;
             else if (t > disp[b]) disp[b] += (t - disp[b]) * 0.55f;
@@ -195,28 +212,29 @@ public class SpectrumView extends View {
     }
 
     private void drawBars(Canvas c, int w, float plotH) {
-        float bw = (float) w / BANDS;
+        float bw = (float) w / bands;
         float gap = Math.max(1f, bw * 0.22f);
         float capH = Math.max(2f, dp(2));
-        for (int b = 0; b < BANDS; b++) {
+        for (int b = 0; b < bands; b++) {
             float x0 = b * bw + gap / 2f;
             float x1 = (b + 1) * bw - gap / 2f;
             float top = plotBottom - disp[b] * plotH;
             if (plotBottom - top > 1f) c.drawRect(x0, top, x1, plotBottom, barPaint);
             float py = plotBottom - peak[b] * plotH - capH - dp(2);
+            if (fallSeconds <= 0f) continue;   // fall off = no peak caps
             peakPaint.setColor(colorAt(peak[b]));
             if (peak[b] > 0.01f) c.drawRect(x0, py, x1, py + capH, peakPaint);
         }
     }
 
     private void drawLine(Canvas c, int w, float plotH) {
-        float bw = (float) w / BANDS;
+        float bw = (float) w / bands;
         linePath.reset();
         float px = bw / 2f;
         float py = plotBottom - disp[0] * plotH;
         linePath.moveTo(0, py);
         linePath.lineTo(px, py);
-        for (int b = 1; b < BANDS; b++) {
+        for (int b = 1; b < bands; b++) {
             float x = (b + 0.5f) * bw;
             float y = plotBottom - disp[b] * plotH;
             linePath.quadTo(px, py, (px + x) / 2f, (py + y) / 2f);
@@ -235,11 +253,11 @@ public class SpectrumView extends View {
     private void drawWaterfall(Canvas c, int w) {
         if (wfDirty) {
             for (int r = 0; r < WF_ROWS; r++) {
-                int src = ((wfHead + r) % WF_ROWS) * BANDS;
-                int dst = r * BANDS;
-                for (int b = 0; b < BANDS; b++) wfPixels[dst + b] = heatColor(wfLevels[src + b]);
+                int src = ((wfHead + r) % WF_ROWS) * bands;
+                int dst = r * bands;
+                for (int b = 0; b < bands; b++) wfPixels[dst + b] = heatColor(wfLevels[src + b]);
             }
-            wfBitmap.setPixels(wfPixels, 0, BANDS, 0, 0, BANDS, WF_ROWS);
+            wfBitmap.setPixels(wfPixels, 0, bands, 0, 0, bands, WF_ROWS);
             wfDirty = false;
         }
         wfDst.set(0, (int) plotTop, w, (int) plotBottom);
