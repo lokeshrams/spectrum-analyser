@@ -61,7 +61,8 @@ public class MainActivity extends Activity {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE};
     static final String[] ORIENT_NAMES = {"Auto-rotate", "Portrait", "Landscape"};
 
-    static final String[] STYLE_NAMES = {"Bars", "Line", "Waterfall"};
+    static final String[] STYLE_NAMES = {"Bars", "Line", "Waterfall",
+            "Rainbow LED", "Rack Analyzer", "Pro Amber", "Dot Matrix", "Car Stereo"};
     static final int[] AUTO_VALUES = {0, 10, 20, 30, 60};
     static final String[] AUTO_NAMES = {"Off", "Every 10 s", "Every 20 s", "Every 30 s", "Every 60 s"};
     static final String[] ON_OFF = {"On", "Off"};
@@ -76,6 +77,7 @@ public class MainActivity extends Activity {
     private boolean hideHintShown = false;
     private int autoIdx;
     private boolean keepOn;
+    private boolean ledPalette;
     private boolean autoGain;
     private int gainDb;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -107,6 +109,7 @@ public class MainActivity extends Activity {
         mode = clampIdx(prefs.getInt("mode", SpectrumView.MODE_BARS), STYLE_NAMES.length);
         autoIdx = clampIdx(prefs.getInt("autoIdx", 0), AUTO_VALUES.length);
         keepOn = prefs.getBoolean("keepOn", true);
+        ledPalette = prefs.getBoolean("ledPalette", false);
         autoGain = prefs.getBoolean("autoGain", true);
         gainDb = Math.max(-12, Math.min(24, prefs.getInt("gainDb", 0)));
         applyKeepOn();
@@ -128,6 +131,7 @@ public class MainActivity extends Activity {
         spectrum.setBandCount(BAND_VALUES[widthIdx]);
         spectrum.setAutoGain(autoGain);
         spectrum.setGainDb(gainDb);
+        spectrum.setUsePalette(ledPalette);
         root.addView(spectrum, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -608,7 +612,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putInt("fallIdx", i).apply();
             });
         }));
-        list.addView(settingRow("Bar / line width", WIDTH_NAMES[widthIdx], v -> {
+        list.addView(settingRow("Bar / line width (Bars, Line, Waterfall)", WIDTH_NAMES[widthIdx], v -> {
             dialog.dismiss();
             pickOne("Bar / line width", WIDTH_NAMES, widthIdx, i -> {
                 widthIdx = i;
@@ -626,6 +630,15 @@ public class MainActivity extends Activity {
             });
         }));
 
+        final String[] ledNames = {"Style's own colours", "My palette (🎨)"};
+        list.addView(settingRow("LED style colours", ledNames[ledPalette ? 1 : 0], v -> {
+            dialog.dismiss();
+            pickOne("LED style colours", ledNames, ledPalette ? 1 : 0, i -> {
+                ledPalette = i == 1;
+                spectrum.setUsePalette(ledPalette);
+                prefs.edit().putBoolean("ledPalette", ledPalette).apply();
+            });
+        }));
         list.addView(settingRow("Auto-cycle styles (random)", AUTO_NAMES[autoIdx], v -> {
             dialog.dismiss();
             pickOne("Auto-cycle styles", AUTO_NAMES, autoIdx, i -> {
