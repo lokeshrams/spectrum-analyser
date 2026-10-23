@@ -3,6 +3,7 @@ package com.lokesh.spectrum;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.WallpaperManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -194,27 +195,29 @@ public class MainActivity extends Activity {
         bar.setBackgroundColor(0xE0111111);
         Button prev = makeBarButton("◀");
         prev.setOnClickListener(v -> stepStyle(-1));
-        bar.addView(prev, new LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.MATCH_PARENT));
+        bar.addView(prev, new LinearLayout.LayoutParams(dp(42), ViewGroup.LayoutParams.MATCH_PARENT));
         styleLabel = makeBarButton("");
         styleLabel.setTypeface(null, Typeface.BOLD);
+        styleLabel.setSingleLine(true);
+        styleLabel.setEllipsize(TextUtils.TruncateAt.END);
         styleLabel.setOnClickListener(v -> pickOne("Style", STYLE_NAMES, mode, this::setMode));
         bar.addView(styleLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         Button next = makeBarButton("▶");
         next.setOnClickListener(v -> stepStyle(1));
-        bar.addView(next, new LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.MATCH_PARENT));
+        bar.addView(next, new LinearLayout.LayoutParams(dp(42), ViewGroup.LayoutParams.MATCH_PARENT));
         Button random = makeBarButton("🎲");
         random.setTextSize(20);
         random.setOnClickListener(v -> randomStyle());
-        bar.addView(random, new LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT));
+        bar.addView(random, new LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.MATCH_PARENT));
         Button colours = makeBarButton("🎨");
         colours.setTextSize(20);
         colours.setOnClickListener(v -> showPaletteDialog());
-        bar.addView(colours, new LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT));
+        bar.addView(colours, new LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.MATCH_PARENT));
         Button settings = makeBarButton("⚙");
         settings.setTextColor(Color.WHITE);
         settings.setTextSize(20);
         settings.setOnClickListener(v -> showSettingsDialog());
-        bar.addView(settings, new LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT));
+        bar.addView(settings, new LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(bar, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(56), Gravity.BOTTOM));
 
@@ -651,6 +654,24 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ---------------------------------------------------------------- live wallpaper
+
+    private void openWallpaperPicker() {
+        try {
+            Intent i = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
+            i.putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                    new ComponentName(this, SpectrumWallpaper.class));
+            startActivity(i);
+        } catch (Throwable t) {
+            try {
+                startActivity(new Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER));
+            } catch (Throwable t2) {
+                Toast.makeText(this, "Open your phone's wallpaper settings and pick Spectrum Analyser",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- now playing
 
     private boolean hasNotificationAccess() {
@@ -779,6 +800,16 @@ public class MainActivity extends Activity {
                 if (nowPlayingOn && !hasNotificationAccess()) askNotificationAccess();
                 updateNowPlaying();
             });
+        }));
+        list.addView(settingRow("Set as live wallpaper", "Uses the style and settings chosen here", v -> {
+            dialog.dismiss();
+            openWallpaperPicker();
+        }));
+        final String[] areaNames = {"Bottom half of screen", "Full screen"};
+        final int areaIdx = prefs.getInt("wallArea", 0) == 1 ? 1 : 0;
+        list.addView(settingRow("Wallpaper area", areaNames[areaIdx], v -> {
+            dialog.dismiss();
+            pickOne("Wallpaper area", areaNames, areaIdx, i -> prefs.edit().putInt("wallArea", i).apply());
         }));
         final String[] ledNames = {"Style's own colours", "My palette (🎨)"};
         list.addView(settingRow("LED / Winamp / tube colours", ledNames[ledPalette ? 1 : 0], v -> {

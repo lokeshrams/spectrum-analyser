@@ -557,6 +557,12 @@ public class SpectrumView extends View {
         }
     }
 
+    /** Number of segments so each one is about cellH tall, within [min, max]. */
+    private static int adaptSegs(float height, float cellH, int min, int max) {
+        int n = Math.round(height / Math.max(1f, cellH));
+        return Math.max(min, Math.min(max, n));
+    }
+
     private int segIndex(float level, int segs) {
         int i = (int) (level * segs - 0.001f);
         return i < 0 ? -1 : Math.min(segs - 1, i);
@@ -564,11 +570,12 @@ public class SpectrumView extends View {
 
     private void drawRainbowLed(Canvas c, int w, float plotH, boolean peaksOn) {
         c.drawColor(Color.BLACK);
-        int segs = 24;
+        float mainHPre = plotH * 0.74f;
         float mainH = plotH * 0.74f;
         float base = plotTop + mainH;
         float reflH = plotBottom + labelH - base;
         float colW = (float) w / bands;
+        int segs = adaptSegs(mainHPre, colW * 1.0f, 14, 40);   // square-ish cells in any orientation
         float gx = Math.max(1f, colW * 0.14f);
         float segH = mainH / segs;
         float gy = Math.max(1f, segH * 0.22f);
@@ -620,9 +627,10 @@ public class SpectrumView extends View {
 
     private void drawRack(Canvas c, int w, float plotH, boolean peaksOn) {
         c.drawColor(0xFF040704);
-        int segs = 40;
+
         float margin = dp(6);
         float colW = (w - 2 * margin) / bands;
+        int segs = adaptSegs(plotH, colW * 0.42f, 24, 72);
         float gx = Math.max(1f, colW * 0.32f);
         for (int b = 0; b < bands; b++) {
             float x0 = margin + b * colW + gx / 2f, x1 = margin + (b + 1) * colW - gx / 2f;
@@ -642,7 +650,7 @@ public class SpectrumView extends View {
 
     private void drawProAmber(Canvas c, int w, float plotH, boolean peaksOn) {
         c.drawColor(0xFF161006);
-        int segs = 30;
+
         float scaleW = dp(30);
         float meterW = Math.max(dp(50), w * 0.11f);
         float gap = dp(10);
@@ -660,6 +668,7 @@ public class SpectrumView extends View {
         }
 
         float colW = areaW / bands;
+        int segs = adaptSegs(plotH, colW * 0.5f, 20, 60);
         float gx = Math.max(1f, colW * 0.18f);
         float segH = plotH / segs;
         for (int b = 0; b < bands; b++) {
@@ -698,8 +707,9 @@ public class SpectrumView extends View {
     /** Glowing dots; no floating peak dot (it lagged awkwardly behind the dots). */
     private void drawDotMatrix(Canvas c, int w, float plotH) {
         c.drawColor(0xFF020202);
-        int rows = 16;
+
         float colW = (float) w / bands;
+        int rows = adaptSegs(plotH, colW, 10, 40);   // round dots stay evenly spaced in portrait
         float rowH = plotH / rows;
         float r = Math.min(colW, rowH) * 0.34f;
         for (int b = 0; b < bands; b++) {
@@ -725,8 +735,9 @@ public class SpectrumView extends View {
         c.drawColor(0xFF07080C);
         float x0a = dp(14), x1a = w - dp(8);
         float areaW = x1a - x0a;
-        int segs = 12;
+
         float colW = areaW / bands;
+        int segs = adaptSegs(plotH, colW * 0.5f, 8, 28);
         float gx = Math.max(2f, colW * 0.2f);
         float segH = plotH / segs;
         float gy = Math.max(1f, segH * 0.14f);
@@ -755,7 +766,7 @@ public class SpectrumView extends View {
         float top = plotTop + tubeW * 0.5f;
         float bottom = plotBottom + labelH * 0.2f - baseH;
         float innerH = bottom - top - tubeW * 0.3f;
-        int segs = 40;
+        int segs = adaptSegs(innerH, tubeW * 0.18f, 20, 80);
         ledText.setColor(0xFF8A7A66);
         ledText.setTextSize(sp(11));
         for (int t = 0; t < 2; t++) {
