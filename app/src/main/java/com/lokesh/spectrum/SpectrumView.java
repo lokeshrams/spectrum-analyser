@@ -146,21 +146,34 @@ public class SpectrumView extends View {
         postInvalidateOnAnimation();
     }
 
-    // Fall speeds in "full heights per second", so the feel is the same on 60 Hz and 120 Hz screens.
-    private static final float BAR_FALL_PER_SEC = 0.5f;    // a full-height bar takes ~2 s to drop
-    private static final float PEAK_FALL_PER_SEC = 0.25f;  // peak caps drift down at half that speed
+    // Fall speeds are timed in seconds, so the feel is the same on 60 Hz and 120 Hz screens.
     private static final long PEAK_HOLD_MS = 700;          // caps hang at the top before falling
+    private float fallSeconds = 2f;                        // time for a full-height bar to drop; 0 = no fall (instant)
     private long lastFrameMs = 0;
+
+    /** Seconds for a full-height bar to fall to zero. 0 turns the fall off (bars follow the music instantly). */
+    public void setFallSeconds(float s) {
+        fallSeconds = Math.max(0f, s);
+    }
+
+    /** Stroke width of the line view, in dp. */
+    public void setLineWidthDp(float w) {
+        linePaint.setStrokeWidth(dp(w));
+        invalidate();
+    }
 
     private void animateLevels() {
         long now = SystemClock.uptimeMillis();
         float dt = lastFrameMs == 0 ? 0.016f : Math.min(0.1f, (now - lastFrameMs) / 1000f);
         lastFrameMs = now;
-        float barDrop = BAR_FALL_PER_SEC * dt;
-        float peakDrop = PEAK_FALL_PER_SEC * dt;
+        boolean instant = fallSeconds <= 0f;
+        float barDrop = instant ? 1f : dt / fallSeconds;
+        // peak caps drift down at half the bar speed; with the fall off they still use a 2 s drift
+        float peakDrop = dt / (instant ? 2f : fallSeconds * 2f);
         for (int b = 0; b < BANDS; b++) {
             float t = target[b];
-            if (t > disp[b]) disp[b] += (t - disp[b]) * 0.55f;
+            if (instant) disp[b] = t;
+            else if (t > disp[b]) disp[b] += (t - disp[b]) * 0.55f;
             else disp[b] = Math.max(t, disp[b] - barDrop);
             if (disp[b] >= peak[b]) {
                 peak[b] = disp[b];

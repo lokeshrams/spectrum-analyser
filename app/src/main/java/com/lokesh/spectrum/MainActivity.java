@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.SharedPreferences;
+import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -43,6 +44,16 @@ public class MainActivity extends Activity {
             {0xFF003300, 0xFF00C853, 0xFFB9F6CA},
     };
 
+    static final float[] FALL_VALUES = {0f, 0.5f, 1f, 2f, 3f, 5f};
+    static final String[] FALL_NAMES = {"Off (no fall)", "0.5 s", "1 s", "2 s", "3 s", "5 s"};
+    static final float[] WIDTH_VALUES = {2f, 4f, 7f, 10f};
+    static final String[] WIDTH_NAMES = {"Thin", "Medium", "Thick", "Extra thick"};
+    static final int[] ORIENT_VALUES = {
+            ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR,
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT,
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE};
+    static final String[] ORIENT_NAMES = {"Auto-rotate", "Portrait", "Landscape"};
+
     private interface ColorCallback { void onColor(int color); }
 
     private SpectrumView spectrum;
@@ -52,6 +63,9 @@ public class MainActivity extends Activity {
     private int mode;
     private int[] palette;
     private boolean askedPermission = false;
+    private int fallIdx;
+    private int widthIdx;
+    private int orientIdx;
 
     private Visualizer visualizer;
     private AudioRecord audioRecord;
@@ -67,6 +81,10 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("spectrum", MODE_PRIVATE);
         mode = prefs.getInt("mode", SpectrumView.MODE_BARS);
         palette = loadPalette();
+        fallIdx = clampIdx(prefs.getInt("fallIdx", 3), FALL_VALUES.length);
+        widthIdx = clampIdx(prefs.getInt("widthIdx", 1), WIDTH_VALUES.length);
+        orientIdx = clampIdx(prefs.getInt("orientIdx", 0), ORIENT_VALUES.length);
+        setRequestedOrientation(ORIENT_VALUES[orientIdx]);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -75,6 +93,8 @@ public class MainActivity extends Activity {
         spectrum.setPadding(0, dp(32), 0, dp(60));
         spectrum.setMode(mode);
         spectrum.setPalette(palette);
+        spectrum.setFallSeconds(FALL_VALUES[fallIdx]);
+        spectrum.setLineWidthDp(WIDTH_VALUES[widthIdx]);
         root.addView(spectrum, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -100,6 +120,11 @@ public class MainActivity extends Activity {
         colours.setTextColor(Color.WHITE);
         colours.setOnClickListener(v -> showPaletteDialog());
         bar.addView(colours, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        Button settings = makeBarButton("⚙");
+        settings.setTextColor(Color.WHITE);
+        settings.setTextSize(20);
+        settings.setOnClickListener(v -> showSettingsDialog());
+        bar.addView(settings, new LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(bar, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(56), Gravity.BOTTOM));
 
@@ -469,13 +494,93 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ---------------------------------------------------------------- settings
+
+    private void showSettingsDialog() {
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(20), dp(4), dp(20), dp(4));
+
+        final AlertDialog dialog = new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Settings")
+                .setNegativeButton("Close", null)
+                .create();
+
+        list.addView(settingRow("Bar fall time", FALL_NAMES[fallIdx], v -> {
+            dialog.dismiss();
+            pickOne("Bar fall time", FALL_NAMES, fallIdx, i -> {
+                fallIdx = i;
+                spectrum.setFallSeconds(FALL_VALUES[i]);
+                prefs.edit().putInt("fallIdx", i).apply();
+            });
+        }));
+        list.addView(settingRow("Line width", WIDTH_NAMES[widthIdx], v -> {
+            dialog.dismiss();
+            pickOne("Line width", WIDTH_NAMES, widthIdx, i -> {
+                widthIdx = i;
+                spectrum.setLineWidthDp(WIDTH_VALUES[i]);
+                prefs.edit().putInt("widthIdx", i).apply();
+            });
+        }));
+        list.addView(settingRow("Orientation", ORIENT_NAMES[orientIdx], v -> {
+            dialog.dismiss();
+            pickOne("Orientation", ORIENT_NAMES, orientIdx, i -> {
+                orientIdx = i;
+                setRequestedOrientation(ORIENT_VALUES[i]);
+                prefs.edit().putInt("orientIdx", i).apply();
+            });
+        }));
+
+        dialog.setView(list);
+        dialog.show();
+    }
+
+    private interface IndexCallback { void onPick(int index); }
+
+    private void pickOne(String title, String[] names, int current, IndexCallback cb) {
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle(title)
+                .setSingleChoiceItems(names, current, (d, which) -> {
+                    cb.onPick(which);
+                    d.dismiss();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private View settingRow(String title, String value, View.OnClickListener click) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(0, dp(12), 0, dp(12));
+        row.setClickable(true);
+        row.setOnClickListener(click);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(16);
+        row.addView(t);
+        TextView v = new TextView(this);
+        v.setText(value);
+        v.setTextColor(0xFF9E9E9E);
+        v.setTextSize(13);
+        row.addView(v);
+        return row;
+    }
+
+    private static int clampIdx(int i, int len) {
+        return (i < 0 || i >= len) ? 0 : i;
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private Button makeBarButton(String text) {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
-        b.setTextSize(15);
+        b.setTextSize(14);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setPadding(dp(2), 0, dp(2), 0);
         b.setBackgroundColor(Color.TRANSPARENT);
         return b;
     }
