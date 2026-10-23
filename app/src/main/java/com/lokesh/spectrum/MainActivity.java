@@ -3,6 +3,8 @@ package com.lokesh.spectrum;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ComponentName;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
@@ -11,7 +13,13 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
+import android.media.MediaMetadata;
 import android.media.MediaRecorder;
+import android.media.session.MediaController;
+import android.media.session.MediaSessionManager;
+import android.media.session.PlaybackState;
+import android.provider.Settings;
+import android.text.TextUtils;
 import android.media.audiofx.Visualizer;
 import android.os.Bundle;
 import android.os.Handler;
@@ -32,6 +40,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Random;
 
 public class MainActivity extends Activity {
@@ -40,7 +49,7 @@ public class MainActivity extends Activity {
     private static final int MIC_RATE = 44100;
     private static final int MIC_N = 2048;
 
-    static final String[] PRESET_NAMES = {"Neon", "Fire", "Ocean", "Rainbow", "Sunset", "Matrix"};
+    static final String[] PRESET_NAMES = {"Neon", "Fire", "Ocean", "Rainbow", "Sunset", "Matrix", "Winamp Classic"};
     static final int[][] PRESETS = {
             {0xFF00E5FF, 0xFF7C4DFF, 0xFFFF00E5},
             {0xFFB71C1C, 0xFFFF6F00, 0xFFFFEB3B},
@@ -48,6 +57,7 @@ public class MainActivity extends Activity {
             {0xFFFF1744, 0xFFFF9100, 0xFFFFEA00, 0xFF00E676, 0xFF2979FF, 0xFFD500F9},
             {0xFF6A1B9A, 0xFFE91E63, 0xFFFFB74D},
             {0xFF003300, 0xFF00C853, 0xFFB9F6CA},
+            {0xFF18A53A, 0xFF29CE10, 0xFFD6B521, 0xFFD65A00, 0xFFEF3110},
     };
 
     static final float[] FALL_VALUES = {0f, 0.5f, 1f, 2f, 3f, 5f};
@@ -62,7 +72,13 @@ public class MainActivity extends Activity {
     static final String[] ORIENT_NAMES = {"Auto-rotate", "Portrait", "Landscape"};
 
     static final String[] STYLE_NAMES = {"Bars", "Line", "Waterfall",
-            "Rainbow LED", "Rack Analyzer", "Pro Amber", "Dot Matrix", "Car Stereo"};
+            "Rainbow LED", "Rack Analyzer", "Pro Amber", "Dot Matrix", "Car Stereo",
+            "Glow Tubes", "Winamp Amber", "Winamp Silver", "Winamp Mirror",
+            "Scope Dots", "Scope Lines", "Scope Solid"};
+    static final float[] PEAK_FALL_VALUES = {6f, 4f, 2.5f, 1.2f, 0.6f};
+    static final String[] PEAK_FALL_NAMES = {"Slower", "Slow", "Moderate", "Fast", "Faster"};
+    static final String[] COLORING_NAMES = {"Normal (gradient by height)", "Fire (hot colour on every tip)",
+            "Line (one colour per bar)"};
     static final int[] AUTO_VALUES = {0, 10, 20, 30, 60};
     static final String[] AUTO_NAMES = {"Off", "Every 10 s", "Every 20 s", "Every 30 s", "Every 60 s"};
     static final String[] ON_OFF = {"On", "Off"};
@@ -78,6 +94,17 @@ public class MainActivity extends Activity {
     private int autoIdx;
     private boolean keepOn;
     private boolean ledPalette;
+    private boolean peaksOn;
+    private int peakFallIdx;
+    private int coloringIdx;
+    private boolean nowPlayingOn;
+    private TextView nowPlaying;
+    private final Runnable nowPlayingPoll = new Runnable() {
+        @Override public void run() {
+            updateNowPlaying();
+            handler.postDelayed(this, 1500);
+        }
+    };
     private boolean autoGain;
     private int gainDb;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -110,6 +137,10 @@ public class MainActivity extends Activity {
         autoIdx = clampIdx(prefs.getInt("autoIdx", 0), AUTO_VALUES.length);
         keepOn = prefs.getBoolean("keepOn", true);
         ledPalette = prefs.getBoolean("ledPalette", false);
+        peaksOn = prefs.getBoolean("peaksOn", true);
+        peakFallIdx = clampIdx(prefs.getInt("peakFallIdx", 2), PEAK_FALL_VALUES.length);
+        coloringIdx = clampIdx(prefs.getInt("coloringIdx", 0), COLORING_NAMES.length);
+        nowPlayingOn = prefs.getBoolean("nowPlaying", true);
         autoGain = prefs.getBoolean("autoGain", true);
         gainDb = Math.max(-12, Math.min(24, prefs.getInt("gainDb", 0)));
         applyKeepOn();
@@ -132,6 +163,9 @@ public class MainActivity extends Activity {
         spectrum.setAutoGain(autoGain);
         spectrum.setGainDb(gainDb);
         spectrum.setUsePalette(ledPalette);
+        spectrum.setPeaksEnabled(peaksOn);
+        spectrum.setPeakFallSeconds(PEAK_FALL_VALUES[peakFallIdx]);
+        spectrum.setColoring(coloringIdx);
         root.addView(spectrum, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -141,6 +175,19 @@ public class MainActivity extends Activity {
         status.setPadding(dp(12), dp(8), dp(12), dp(8));
         root.addView(status, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START));
+
+        nowPlaying = new TextView(this);
+        nowPlaying.setTextColor(0xFFE0E0E0);
+        nowPlaying.setTextSize(13);
+        nowPlaying.setSingleLine(true);
+        nowPlaying.setEllipsize(TextUtils.TruncateAt.END);
+        nowPlaying.setGravity(Gravity.END);
+        nowPlaying.setPadding(dp(12), dp(8), dp(12), dp(8));
+        nowPlaying.setVisibility(View.GONE);
+        root.addView(nowPlaying, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END));
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
+                nowPlaying.setMaxWidth((int) ((r - l) * 0.68f)));
 
         bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -195,6 +242,8 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         scheduleAutoCycle();
+        handler.removeCallbacks(nowPlayingPoll);
+        handler.post(nowPlayingPoll);
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startAudio();
         } else if (!askedPermission) {
@@ -208,6 +257,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         handler.removeCallbacks(autoCycle);
+        handler.removeCallbacks(nowPlayingPoll);
         stopAudio();
         super.onPause();
     }
@@ -235,17 +285,21 @@ public class MainActivity extends Activity {
             final float fs = v.getSamplingRate() / 1000f;   // milliHz -> Hz
             int rc = v.setDataCaptureListener(new Visualizer.OnDataCaptureListener() {
                 @Override
-                public void onWaveFormDataCapture(Visualizer vis, byte[] wave, int rate) { }
+                public void onWaveFormDataCapture(Visualizer vis, byte[] wave, int rate) {
+                    float[] w = new float[wave.length];
+                    for (int i = 0; i < wave.length; i++) w[i] = ((wave[i] & 0xFF) - 128) / 128f;
+                    spectrum.submitWave(w, w.length);
+                }
 
                 @Override
                 public void onFftDataCapture(Visualizer vis, byte[] fft, int rate) {
                     handleVisualizerFft(fft, fs, size);
                 }
-            }, Visualizer.getMaxCaptureRate(), false, true);
+            }, Visualizer.getMaxCaptureRate(), true, true);
             if (rc != Visualizer.SUCCESS) throw new IllegalStateException("listener " + rc);
             if (v.setEnabled(true) != Visualizer.SUCCESS) throw new IllegalStateException("enable");
             visualizer = v;
-            status.setText("Source: phone audio");
+            status.setText("Phone audio");
         } catch (Throwable t) {
             if (visualizer != null) { try { visualizer.release(); } catch (Throwable ignored) { } }
             visualizer = null;
@@ -282,7 +336,7 @@ public class MainActivity extends Activity {
             status.setText("Could not open phone audio or microphone.");
             return;
         }
-        status.setText("Source: microphone (phone audio not available on this device)");
+        status.setText("Microphone (phone audio blocked)");
         audioRecord.startRecording();
         micRunning = true;
         final AudioRecord rec = audioRecord;
@@ -304,8 +358,10 @@ public class MainActivity extends Activity {
                 got += r;
             }
             if (!micRunning || got < MIC_N) continue;
+            final float[] samples = new float[MIC_N];
             for (int i = 0; i < MIC_N; i++) {
-                re[i] = buf[i] / 32768f * window[i];
+                samples[i] = buf[i] / 32768f;
+                re[i] = samples[i] * window[i];
                 im[i] = 0f;
             }
             fft(re, im);
@@ -314,7 +370,10 @@ public class MainActivity extends Activity {
             for (int k = 0; k < mags.length; k++) {
                 mags[k] = (float) Math.sqrt(re[k] * re[k] + im[k] * im[k]) * scale;
             }
-            spectrum.post(() -> spectrum.submit(mags, (float) MIC_RATE / MIC_N));
+            spectrum.post(() -> {
+                spectrum.submit(mags, (float) MIC_RATE / MIC_N);
+                spectrum.submitWave(samples, MIC_N / 2);   // ~23 ms window, like the phone-audio scope
+            });
         }
     }
 
@@ -592,6 +651,64 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ---------------------------------------------------------------- now playing
+
+    private boolean hasNotificationAccess() {
+        String enabled = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+        return enabled != null && enabled.contains(getPackageName());
+    }
+
+    private void askNotificationAccess() {
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Show song title")
+                .setMessage("To show the song playing in Spotify or YouTube, Android needs you to turn on "
+                        + "notification access for Spectrum Analyser on the next screen. The app only reads "
+                        + "the song title and artist.")
+                .setPositiveButton("Open settings", (d, w) -> {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+                    } catch (Throwable t) {
+                        Toast.makeText(this, "Open Settings > Notifications > Notification access", Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("Not now", null)
+                .show();
+    }
+
+    private void updateNowPlaying() {
+        if (nowPlaying == null) return;
+        String text = null;
+        if (nowPlayingOn && hasNotificationAccess()) {
+            try {
+                MediaSessionManager msm = (MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
+                List<MediaController> sessions = msm.getActiveSessions(new ComponentName(this, NowPlayingListener.class));
+                MediaController pick = null;
+                for (MediaController mc : sessions) {
+                    PlaybackState ps = mc.getPlaybackState();
+                    if (ps != null && ps.getState() == PlaybackState.STATE_PLAYING) { pick = mc; break; }
+                }
+                if (pick == null && !sessions.isEmpty()) pick = sessions.get(0);
+                if (pick != null && pick.getMetadata() != null) {
+                    MediaMetadata md = pick.getMetadata();
+                    String title = md.getString(MediaMetadata.METADATA_KEY_TITLE);
+                    String artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST);
+                    if (TextUtils.isEmpty(artist)) artist = md.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+                    if (!TextUtils.isEmpty(title)) {
+                        text = "♪ " + title + (TextUtils.isEmpty(artist) ? "" : " · " + artist);
+                    }
+                }
+            } catch (Throwable ignored) {
+                // access revoked or no sessions: hide the title
+            }
+        }
+        if (text == null) {
+            nowPlaying.setVisibility(View.GONE);
+        } else {
+            if (!text.contentEquals(nowPlaying.getText())) nowPlaying.setText(text);
+            nowPlaying.setVisibility(View.VISIBLE);
+        }
+    }
+
     // ---------------------------------------------------------------- settings
 
     private void showSettingsDialog() {
@@ -630,8 +747,41 @@ public class MainActivity extends Activity {
             });
         }));
 
+        list.addView(settingRow("Peaks", peaksOn ? "On" : "Off", v -> {
+            dialog.dismiss();
+            pickOne("Peaks", ON_OFF, peaksOn ? 0 : 1, i -> {
+                peaksOn = i == 0;
+                spectrum.setPeaksEnabled(peaksOn);
+                prefs.edit().putBoolean("peaksOn", peaksOn).apply();
+            });
+        }));
+        list.addView(settingRow("Peak fall speed", PEAK_FALL_NAMES[peakFallIdx], v -> {
+            dialog.dismiss();
+            pickOne("Peak fall speed", PEAK_FALL_NAMES, peakFallIdx, i -> {
+                peakFallIdx = i;
+                spectrum.setPeakFallSeconds(PEAK_FALL_VALUES[i]);
+                prefs.edit().putInt("peakFallIdx", i).apply();
+            });
+        }));
+        list.addView(settingRow("Bar colouring (Winamp)", COLORING_NAMES[coloringIdx], v -> {
+            dialog.dismiss();
+            pickOne("Bar colouring", COLORING_NAMES, coloringIdx, i -> {
+                coloringIdx = i;
+                spectrum.setColoring(i);
+                prefs.edit().putInt("coloringIdx", i).apply();
+            });
+        }));
+        list.addView(settingRow("Now playing title", nowPlayingOn ? "On" : "Off", v -> {
+            dialog.dismiss();
+            pickOne("Now playing title", ON_OFF, nowPlayingOn ? 0 : 1, i -> {
+                nowPlayingOn = i == 0;
+                prefs.edit().putBoolean("nowPlaying", nowPlayingOn).apply();
+                if (nowPlayingOn && !hasNotificationAccess()) askNotificationAccess();
+                updateNowPlaying();
+            });
+        }));
         final String[] ledNames = {"Style's own colours", "My palette (🎨)"};
-        list.addView(settingRow("LED style colours", ledNames[ledPalette ? 1 : 0], v -> {
+        list.addView(settingRow("LED / Winamp / tube colours", ledNames[ledPalette ? 1 : 0], v -> {
             dialog.dismiss();
             pickOne("LED style colours", ledNames, ledPalette ? 1 : 0, i -> {
                 ledPalette = i == 1;
